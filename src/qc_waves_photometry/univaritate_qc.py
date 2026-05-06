@@ -6,9 +6,11 @@ import pyarrow.parquet as pq
 import pyarrow as pa
 from matplotlib.patches import Patch
 from scipy.stats import gaussian_kde
+import argparse
+import yaml
+
 
 class ColumnQC:
-    # handle NaNs. 
     def __init__ (self, column_name, file_path, index_mask = None, logged = False):
         self.column_name = column_name
         self.file_path = file_path
@@ -54,12 +56,21 @@ class ColumnQC:
         else:
             plt.show()
     
+
     def min(self):
         return np.min(self.photom_col[self.column_name])
     
 
     def max(self):
         return np.max(self.photom_col[self.column_name])
+    
+
+    def mean(self):
+        return np.mean(self.photom_col[self.column_name])
+    
+
+    def median(self):
+        return np.median(self.photom_col[self.column_name])
     
 
     def stdev(self):
@@ -83,7 +94,7 @@ class ColumnQC:
 
 
     def three_sigma_outliers(self):
-        mean = np.mean(self.photom_col[self.column_name])
+        mean = self.mean()
         std_dev = self.stdev()
         outliers = self.photom_col[np.abs(self.photom_col[self.column_name] - mean) > 3 * std_dev]
         return outliers
@@ -96,9 +107,13 @@ class ColumnQC:
 
 class UnivariatePhotomQC:
     def __init__(self, region_file_path='/Users/sp624AA/Downloads/waves_qc/photometry_WD01.parquet',
-                 region_maml_file_path='/Users/sp624AA/Downloads/waves_qc/photometry_WD01.maml',):
+                 region_maml_file_path='/Users/sp624AA/Downloads/waves_qc/photometry_WD01.maml',
+                 region_name='WD01',
+                 save_dir='/Users/sp624AA/Downloads/waves_qc/plots'):
         self.region_file_path = region_file_path
         self.region_maml_file_path = region_maml_file_path
+        self.region_name = region_name
+        self.save_dir = save_dir
 
         self.flux_masks = ['mask', 'starmask', 'artefact']
         self.mag_masks = ['mask', 'starmask', 'artefact']
@@ -128,7 +143,7 @@ class UnivariatePhotomQC:
 
             'seeings': {'columns': None, 'logged': False, 'apply_flags': None},
 
-            'radii': {'columns': None, 'logged': False, 'apply_flags': self.radii_masks},
+            'radii': {'columns': None, 'logged': True, 'apply_flags': self.radii_masks},
 
             'flags': {'columns': None, 'logged': False, 'apply_flags': None},
 
@@ -139,6 +154,8 @@ class UnivariatePhotomQC:
             'misc_strings': {'columns': None, 'logged': False, 'apply_flags': None}
         }
 
+        self._sort_columns()
+        self._get_unit_lookup_table()
 
     def get_column_names(self):
         return pq.read_schema(self.region_file_path).names
@@ -150,9 +167,25 @@ class UnivariatePhotomQC:
 
     def get_column_length(self):
         return pq.read_table(self.region_file_path, columns=[self.get_column_names()[0]]).num_rows
+    
+
+    def _get_unit_lookup_table(self):
+        with open(self.region_maml_file_path, 'r', encoding='utf-8') as f:
+            metadata = yaml.safe_load(f)
+
+        maml_fields = metadata.get("fields", [])
+
+        self.units_by_column = {
+        field["name"]: field.get("unit")
+        for field in maml_fields
+        if "name" in field
+    }
+
+    def get_column_unit(self, column_name):
+        return self.units_by_column.get(column_name)
 
 
-    def sort_columns(self):
+    def _sort_columns(self):
 
         col_names = self.get_column_names()
         col_types = {name: t for name, t in zip(col_names, self.get_column_types())}
@@ -242,6 +275,7 @@ class UnivariatePhotomQC:
     def plot_pdfs_per_bag(self, bag_name, save_location=None):
         if bag_name not in self.bags_of_columns:
             raise ValueError(f"Bag name '{bag_name}' not found. Available bags: {list(self.bags_of_columns.keys())}")
+        
         columns = self.bags_of_columns[bag_name]['columns']
         logged = self.bags_of_columns[bag_name]['logged']
         mask = self.bags_of_columns[bag_name]['apply_flags']
@@ -267,25 +301,29 @@ class UnivariatePhotomQC:
             all_percentiles = percentiles_dict[col]   # shape (100,)
             p0, p100 = minmax_dict[col]
 
-            # --- Violin shape via KDE on the 100 percentile values ---
-            y_range = np.linspace(p0, p100, 100)
-            density = all_percentiles
-            violin_width = 0.35
+            # --- pdf shape via KDE on the 100 percentile values ---
+            kde = gaussian_kde(all_percentiles)
+            y_range = np.linspace(p0, p100, 101)
+            density = kde(y_range)
+            violin_width = 0.95
             density_scaled = density / density.max() * violin_width
 
-            # Fill violin
+            # Fill pdf
+            pos = pos - 0.95/2
             ax.fill_betweenx(y_range, pos, pos + density_scaled,
                             alpha=0.4, color='black', zorder=2)
-            #ax.plot(pos - density_scaled, y_range, color='black', linewidth=0.8, zorder=2)
             ax.plot(pos + density_scaled, y_range, color='black', linewidth=0.8, zorder=2)
 
-
+        units = self.get_column_unit(columns[0])  # Assuming all columns in the bag have the same unit
         ax.set_xticks(list(positions))
         ax.set_xticklabels(columns, rotation=45, ha='right')
         ax.set_xlim(0.5, len(columns) + 0.5)
         ax.set_xlabel('Columns')
-        ax.set_ylabel('Value')
-        ax.set_title(f'Sigma Percentile Distributions for {bag_name}')
+        if logged:
+            ax.set_ylabel(f'Log10([{units}])')
+        else:
+            ax.set_ylabel(f'[{units}]')
+        ax.set_title(f'{self.region_name} - PDFs for {bag_name}\nMasked on: {mask}')
         ax.grid(True, axis='y', linestyle='--', alpha=0.5)
 
         plt.tight_layout()
@@ -295,13 +333,81 @@ class UnivariatePhotomQC:
             plt.show()
         
 
-    def plot_single_pdf(self, save_location=None):
+    def plot_single_pdfs_per_bag(self, bag_name, save_location=None):
         pass
 
 
-    def plot_bar_charts_per_bag(self, bag_name, save_location=None):
+    def plot_bar_charts_per_bag(self, bag_name, attribute, save_location=None):
+
+        if bag_name not in self.bags_of_columns:
+            raise ValueError(f"Bag name '{bag_name}' not found. Available bags: {list(self.bags_of_columns.keys())}")
+        
+        columns = self.bags_of_columns[bag_name]['columns']
+        logged = self.bags_of_columns[bag_name]['logged']
+        mask = self.bags_of_columns[bag_name]['apply_flags']
+        if mask:
+            index_mask = self.get_flagged_indexs(mask)
+        if not columns:
+            raise ValueError(f"No columns found in bag '{bag_name}'")
+        
+        attribute_functions = {
+            'min': lambda qc: qc.min(),
+            'max': lambda qc: qc.max(),
+            'mean': lambda qc: qc.mean(),
+            'median': lambda qc: qc.median(),
+            'stdev': lambda qc: qc.stdev(),
+            'mad': lambda qc: qc.mad(),
+            '3_sigma_outliers': lambda qc: len(qc.three_sigma_outliers()),
+            'nan_fraction': lambda qc: qc.nan_fraction()
+        }
+        if attribute not in attribute_functions:
+            raise ValueError(f"Attribute '{attribute}' not recognized. Available attributes: {list(attribute_functions.keys())}")
+        attribute_values = []
+        for col in columns:
+            col_qc = ColumnQC(column_name=col, file_path=self.region_file_path, index_mask=index_mask, logged=logged)
+            col_qc.load_column()
+            if attribute != 'nan_fraction':
+                col_qc.drop_nans()
+            attribute_value = attribute_functions[attribute](col_qc)
+            attribute_values.append(attribute_value)
+            col_qc.clean_up_memory()
+        fig, ax = plt.subplots(figsize=(max(8, len(columns) * 1.5), 6))
+        ax.bar(columns, attribute_values, color='black', alpha=0.7)
+        units = self.get_column_unit(columns[0])  # Assuming all columns in the bag have the same unit
+        ax.set_xticks(range(len(columns)))
+        ax.set_xticklabels(columns, rotation=45, ha='right')
+        ax.set_xlabel('Columns')
+        if logged:
+            ax.set_ylabel(f'Log10([{units}])')
+        else:
+            ax.set_ylabel(f'[{units}]')
+        ax.set_title(f'{self.region_name} - {attribute} for {bag_name}\nMasked on: {mask}')
+        ax.grid(True, axis='y', linestyle='--', alpha=0.5)
+        plt.tight_layout()
+        if save_location:
+            plt.savefig(save_location)
+        else:
+            plt.show()
+
+
+    def plot_single_bar_charts_per_bag(self, save_location=None):
         pass
 
 
-    def plot_single_bar_chart(self, save_location=None):
-        pass
+
+
+def main():
+    argparser = argparse.ArgumentParser(description='Univariate QC for photometry data')
+    argparser.add_argument('--region_file_path', type=str, default='/Users/sp624AA/Downloads/waves_qc/photometry_WD01.parquet', help='Path to the region parquet file')
+    argparser.add_argument('--region_maml_file_path', type=str, default='/Users/sp624AA/Downloads/waves_qc/photometry_WD01.maml', help='Path to the region maml file')
+    argparser.add_argument('--region_name', type=str, default='WD01', help='Name of the region')
+    argparser.add_argument('--save_dir', type=str, default='/Users/sp624AA/Downloads/waves_qc/plots', help='Directory to save the plots')
+    args = argparser.parse_args()
+
+    qc = UnivariatePhotomQC(region_file_path=args.region_file_path, region_maml_file_path=args.region_maml_file_path, region_name=args.region_name)
+
+
+
+
+if __name__ == "__main__":
+    main()
