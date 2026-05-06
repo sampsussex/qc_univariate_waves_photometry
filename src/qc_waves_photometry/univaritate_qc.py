@@ -120,39 +120,49 @@ class UnivariatePhotomQC:
         self.mag_masks = ['mask', 'starmask', 'artefact']
         self.radii_masks = ['mask', 'starmask', 'artefact']
 
+        self.coord_plots = {'pdf': 'bag', 'bar': ['min', 'max', 'nan_fraction']}
+        self.flux_plots = {'pdf': 'bag', 'bar': ['min', 'max', 'mean', 'median', 'stdev', 'mad', '3_sigma_outliers', 'nan_fraction']}
+        self.mag_plots = {'pdf': 'bag', 'bar': ['min', 'max', 'mean', 'median', 'stdev', 'mad', '3_sigma_outliers', 'nan_fraction']}
+        self.seeing_plots = {'pdf': 'bag', 'bar': ['min', 'max', 'mean', 'median', 'stdev', 'mad', '3_sigma_outliers', 'nan_fraction']}
+        self.radii_plots = {'pdf': 'bag', 'bar': ['min', 'max', 'mean', 'median', 'stdev', 'mad', '3_sigma_outliers', 'nan_fraction']}
+        self.flags_plots = {'bar': ['nan_fraction']}
+        self.misc_floats_plots = {'pdf': 'single', 'bar': ['min', 'max', 'mean', 'median', 'stdev', 'mad', '3_sigma_outliers', 'nan_fraction']}
+        self.misc_ints_plots = {'pdf': None, 'bar': ['min', 'max', 'mean', 'median', 'stdev', 'mad', '3_sigma_outliers', 'nan_fraction']}
+        self.misc_strings_plots = {'pdf': None, 'bar': ['nan_fraction']}
+
         # I need to find a way of ready the maml and getting the units automatically. 
         self.bags_of_columns = {
-            'sky_coordinates': {'columns': None, 'logged': False, 'apply_flags': None},
+            'sky_coordinates': {'columns': None, 'logged': False, 'apply_flags': None, 'plots': self.coord_plots},
 
-            'total_fluxes': {'columns': None, 'logged': True, 'apply_flags': self.flux_masks},
+            'total_fluxes': {'columns': None, 'logged': True, 'apply_flags': self.flux_masks, 'plots': self.flux_plots},
 
-            'total_flux_errors': {'columns': None, 'logged': True, 'apply_flags': self.flux_masks},
+            'total_flux_errors': {'columns': None, 'logged': True, 'apply_flags': self.flux_masks, 'plots': self.flux_plots},
 
-            'total_uncorrected_fluxes': {'columns': None, 'logged': True, 'apply_flags': self.flux_masks},
+            'total_uncorrected_fluxes': {'columns': None, 'logged': True, 'apply_flags': self.flux_masks, 'plots': self.flux_plots},
 
-            'total_uncorrected_flux_errors': {'columns': None, 'logged': True, 'apply_flags': self.flux_masks},
+            'total_uncorrected_flux_errors': {'columns': None, 'logged': True, 'apply_flags': self.flux_masks, 'plots': self.flux_plots},
 
-            'colour_fluxes': {'columns': None, 'logged': True, 'apply_flags': self.flux_masks},
+            'colour_fluxes': {'columns': None, 'logged': True, 'apply_flags': self.flux_masks, 'plots': self.flux_plots},
 
-            'colour_flux_errors': {'columns': None, 'logged': True, 'apply_flags': self.flux_masks},
+            'colour_flux_errors': {'columns': None, 'logged': True, 'apply_flags': self.flux_masks, 'plots': self.flux_plots},
 
-            'fibre_magnitudes': {'columns': None, 'logged': False, 'apply_flags': self.mag_masks},
+            'fibre_magnitudes': {'columns': None, 'logged': False, 'apply_flags': self.mag_masks, 'plots': self.mag_plots},
 
-            'fibre_magnitude_errors': {'columns': None, 'logged': False, 'apply_flags': self.mag_masks},
+            'fibre_magnitude_errors': {'columns': None, 'logged': False, 'apply_flags': self.mag_masks, 'plots': self.mag_plots},
 
-            'Z_magnitudes': {'columns': None, 'logged': False, 'apply_flags': self.mag_masks},
+            'Z_magnitudes': {'columns': None, 'logged': False, 'apply_flags': self.mag_masks, 'plots': self.mag_plots},
 
-            'seeings': {'columns': None, 'logged': False, 'apply_flags': None},
+            'seeings': {'columns': None, 'logged': False, 'apply_flags': None, 'plots': self.seeing_plots},
 
-            'radii': {'columns': None, 'logged': True, 'apply_flags': self.radii_masks},
+            'radii': {'columns': None, 'logged': True, 'apply_flags': self.radii_masks, 'plots': self.radii_plots},
 
-            'flags': {'columns': None, 'logged': False, 'apply_flags': None},
+            'flags': {'columns': None, 'logged': False, 'apply_flags': None, 'plots': self.flags_plots},
 
-            'misc_floats': {'columns': None, 'logged': False, 'apply_flags': None},
+            'misc_floats': {'columns': None, 'logged': False, 'apply_flags': None, 'plots': self.misc_floats_plots},
 
-            'misc_ints': {'columns': None, 'logged': False, 'apply_flags': None},
+            'misc_ints': {'columns': None, 'logged': False, 'apply_flags': None, 'plots': self.misc_ints_plots},
 
-            'misc_strings': {'columns': None, 'logged': False, 'apply_flags': None}
+            'misc_strings': {'columns': None, 'logged': False, 'apply_flags': None, 'plots': self.misc_strings_plots}
         }
 
         self._sort_columns()
@@ -342,12 +352,10 @@ class UnivariatePhotomQC:
         logged = self.bags_of_columns[bag_name]['logged']
         mask = self.bags_of_columns[bag_name]['apply_flags']
         index_mask = self.get_flagged_indexs(mask) if mask else None
+
         if not columns:
             raise ValueError(f"No columns found in bag '{bag_name}'")
 
-        use_dir = bool(save_location) and os.path.isdir(save_location)
-        file_root, file_ext = os.path.splitext(save_location) if save_location and not use_dir else ("", ".png")
-        file_ext = file_ext or ".png"
 
         for col in columns:
             col_qc = ColumnQC(column_name=col, file_path=self.region_file_path, index_mask=index_mask, logged=logged)
@@ -371,11 +379,7 @@ class UnivariatePhotomQC:
             plt.tight_layout()
 
             if save_location:
-                if use_dir:
-                    output_path = os.path.join(save_location, f'{self.region_name}_{bag_name}_{col}_pdf.png')
-                else:
-                    output_path = f'{file_root}_{col}{file_ext}'
-                plt.savefig(output_path)
+                plt.savefig(save_location)
             else:
                 plt.show()
 
@@ -436,67 +440,29 @@ class UnivariatePhotomQC:
             plt.show()
 
 
-    def plot_single_bar_charts_per_bag(self, bag_name, attribute, save_location=None):
-        if bag_name not in self.bags_of_columns:
-            raise ValueError(f"Bag name '{bag_name}' not found. Available bags: {list(self.bags_of_columns.keys())}")
-
-        columns = self.bags_of_columns[bag_name]['columns']
-        logged = self.bags_of_columns[bag_name]['logged']
-        mask = self.bags_of_columns[bag_name]['apply_flags']
-        index_mask = self.get_flagged_indexs(mask) if mask else None
-        if not columns:
-            raise ValueError(f"No columns found in bag '{bag_name}'")
-
-        attribute_functions = {
-            'min': lambda qc: qc.min(),
-            'max': lambda qc: qc.max(),
-            'mean': lambda qc: qc.mean(),
-            'median': lambda qc: qc.median(),
-            'stdev': lambda qc: qc.stdev(),
-            'mad': lambda qc: qc.mad(),
-            '3_sigma_outliers': lambda qc: len(qc.three_sigma_outliers()),
-            'nan_fraction': lambda qc: qc.nan_fraction()
-        }
-        if attribute not in attribute_functions:
-            raise ValueError(f"Attribute '{attribute}' not recognized. Available attributes: {list(attribute_functions.keys())}")
-
-        use_dir = bool(save_location) and os.path.isdir(save_location)
-        file_root, file_ext = os.path.splitext(save_location) if save_location and not use_dir else ("", ".png")
-        file_ext = file_ext or ".png"
-
-        for col in columns:
-            col_qc = ColumnQC(column_name=col, file_path=self.region_file_path, index_mask=index_mask, logged=logged)
-            col_qc.load_column()
-            if attribute != 'nan_fraction':
-                col_qc.drop_nans()
-            attribute_value = attribute_functions[attribute](col_qc)
-
-            fig, ax = plt.subplots(figsize=(6, 6))
-            ax.bar([col], [attribute_value], color='black', alpha=0.7)
-            units = self.get_column_unit(col)
-            if attribute == 'nan_fraction':
-                ax.set_ylabel(attribute)
-            elif logged:
-                ax.set_ylabel(f'{attribute} Log10([{units}])')
-            else:
-                ax.set_ylabel(f'{attribute} [{units}]')
-            ax.set_title(f'{self.region_name} - {attribute} for {col}\nBag: {bag_name} | Masked on: {mask}')
-            ax.grid(True, axis='y', linestyle='--', alpha=0.5)
-            plt.tight_layout()
-
-            if save_location:
-                if use_dir:
-                    output_path = os.path.join(save_location, f'{self.region_name}_{bag_name}_{col}_{attribute}.png')
-                else:
-                    output_path = f'{file_root}_{col}_{attribute}{file_ext}'
-                plt.savefig(output_path)
-            else:
-                plt.show()
-
-            plt.close(fig)
-            col_qc.clean_up_memory()
+    def make_all_plots(self):
+        for bag_name, bag_info in self.bags_of_columns.items():
+            plots = bag_info['plots']
+            if 'pdf' in plots and plots['pdf'] == 'bag':
+                save_loc = os.path.join(self.save_dir, f'{bag_name}/pdfs/{self.region_name}/{bag_name}_pdfs.png')
+                # create directory if it doesn't exist
+                os.makedirs(os.path.dirname(save_loc), exist_ok=True)
+                self.plot_pdfs_per_bag(bag_name, save_location=save_loc)
 
 
+            elif 'pdf' in plots and plots['pdf'] == 'single':
+                for col in self.bags_of_columns[bag_name]['columns']:
+                    save_loc = os.path.join(self.save_dir, f'{bag_name}/pdfs/{self.region_name}/{col}_single_pdfs.png')
+                    # create directory if it doesn't exist
+                    os.makedirs(os.path.dirname(save_loc), exist_ok=True)
+                    self.plot_single_pdfs_per_bag(bag_name, save_location=save_loc)
+            
+            if 'bar' in plots:
+                for attribute in plots['bar']:
+                    self.save_loc = os.path.join(self.save_dir, f'{bag_name}/bar_charts/{self.region_name}/{bag_name}_{attribute}_bar.png')
+                    # create directory if it doesn't exist
+                    os.makedirs(os.path.dirname(self.save_loc), exist_ok=True)
+                    self.plot_bar_charts_per_bag(bag_name, attribute, save_location=self.save_loc)
 
 
 def main():
@@ -509,7 +475,7 @@ def main():
 
     qc = UnivariatePhotomQC(region_file_path=args.region_file_path, region_maml_file_path=args.region_maml_file_path, region_name=args.region_name)
 
-
+    qc.make_all_plots()
 
 
 if __name__ == "__main__":
