@@ -97,7 +97,7 @@ class ColumnQC:
     def three_sigma_outliers(self):
         mean = self.mean()
         std_dev = self.stdev()
-        outliers = self.photom_col[np.abs(self.photom_col[self.column_name] - mean) > 3 * std_dev]
+        outliers = self.photom_col[np.abs(self.photom_col[self.column_name] - mean) > 3 * std_dev] / len(self.photom_col[self.column_name])
         return outliers
     
 
@@ -433,10 +433,16 @@ class UnivariatePhotomQC:
         ax.set_xticks(range(len(columns)))
         ax.set_xticklabels(columns, rotation=45, ha='right')
         ax.set_xlabel('Columns')
-        if logged:
-            ax.set_ylabel(f'Log10([{units}])')
+        if attribute == 'nan_fraction':
+            ax.set_ylabel('Fraction')
+        if attribute == '3_sigma_outliers':
+            ax.set_ylabel('Fraction')
         else:
-            ax.set_ylabel(f'[{units}]')
+            if logged:
+                ax.set_ylabel(f'Log10([{units}])')
+            else:
+                ax.set_ylabel(f'[{units}]')
+
         ax.set_title(f'{self.region_name} - {attribute} for {bag_name}\nMasked on: {mask}')
         ax.grid(True, axis='y', linestyle='--', alpha=0.5)
         plt.tight_layout()
