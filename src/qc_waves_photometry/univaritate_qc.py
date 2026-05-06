@@ -4,6 +4,7 @@ from scipy import stats
 import matplotlib.pyplot as plt
 import pyarrow.parquet as pq
 import pyarrow as pa
+import os
 from matplotlib.patches import Patch
 from scipy.stats import gaussian_kde
 import argparse
@@ -334,7 +335,52 @@ class UnivariatePhotomQC:
         
 
     def plot_single_pdfs_per_bag(self, bag_name, save_location=None):
-        pass
+        if bag_name not in self.bags_of_columns:
+            raise ValueError(f"Bag name '{bag_name}' not found. Available bags: {list(self.bags_of_columns.keys())}")
+
+        columns = self.bags_of_columns[bag_name]['columns']
+        logged = self.bags_of_columns[bag_name]['logged']
+        mask = self.bags_of_columns[bag_name]['apply_flags']
+        index_mask = self.get_flagged_indexs(mask) if mask else None
+        if not columns:
+            raise ValueError(f"No columns found in bag '{bag_name}'")
+
+        use_dir = bool(save_location) and os.path.isdir(save_location)
+        file_root, file_ext = os.path.splitext(save_location) if save_location and not use_dir else ("", ".png")
+        file_ext = file_ext or ".png"
+
+        for col in columns:
+            col_qc = ColumnQC(column_name=col, file_path=self.region_file_path, index_mask=index_mask, logged=logged)
+            values = col_qc.load_column().dropna().to_numpy()
+
+            fig, ax = plt.subplots(figsize=(8, 6))
+            if values.size:
+                ax.hist(values, bins=50, density=True, color='black', alpha=0.35)
+                if values.size > 1 and values.min() != values.max():
+                    x_range = np.linspace(values.min(), values.max(), 200)
+                    ax.plot(x_range, gaussian_kde(values)(x_range), color='black', linewidth=1.2)
+
+            units = self.get_column_unit(col)
+            if logged:
+                ax.set_xlabel(f'Log10([{units}])')
+            else:
+                ax.set_xlabel(f'[{units}]')
+            ax.set_ylabel('Density')
+            ax.set_title(f'{self.region_name} - PDF for {col}\nBag: {bag_name} | Masked on: {mask}')
+            ax.grid(True, axis='y', linestyle='--', alpha=0.5)
+            plt.tight_layout()
+
+            if save_location:
+                if use_dir:
+                    output_path = os.path.join(save_location, f'{self.region_name}_{bag_name}_{col}_pdf.png')
+                else:
+                    output_path = f'{file_root}_{col}{file_ext}'
+                plt.savefig(output_path)
+            else:
+                plt.show()
+
+            plt.close(fig)
+            col_qc.clean_up_memory()
 
 
     def plot_bar_charts_per_bag(self, bag_name, attribute, save_location=None):
@@ -390,8 +436,65 @@ class UnivariatePhotomQC:
             plt.show()
 
 
-    def plot_single_bar_charts_per_bag(self, save_location=None):
-        pass
+    def plot_single_bar_charts_per_bag(self, bag_name, attribute, save_location=None):
+        if bag_name not in self.bags_of_columns:
+            raise ValueError(f"Bag name '{bag_name}' not found. Available bags: {list(self.bags_of_columns.keys())}")
+
+        columns = self.bags_of_columns[bag_name]['columns']
+        logged = self.bags_of_columns[bag_name]['logged']
+        mask = self.bags_of_columns[bag_name]['apply_flags']
+        index_mask = self.get_flagged_indexs(mask) if mask else None
+        if not columns:
+            raise ValueError(f"No columns found in bag '{bag_name}'")
+
+        attribute_functions = {
+            'min': lambda qc: qc.min(),
+            'max': lambda qc: qc.max(),
+            'mean': lambda qc: qc.mean(),
+            'median': lambda qc: qc.median(),
+            'stdev': lambda qc: qc.stdev(),
+            'mad': lambda qc: qc.mad(),
+            '3_sigma_outliers': lambda qc: len(qc.three_sigma_outliers()),
+            'nan_fraction': lambda qc: qc.nan_fraction()
+        }
+        if attribute not in attribute_functions:
+            raise ValueError(f"Attribute '{attribute}' not recognized. Available attributes: {list(attribute_functions.keys())}")
+
+        use_dir = bool(save_location) and os.path.isdir(save_location)
+        file_root, file_ext = os.path.splitext(save_location) if save_location and not use_dir else ("", ".png")
+        file_ext = file_ext or ".png"
+
+        for col in columns:
+            col_qc = ColumnQC(column_name=col, file_path=self.region_file_path, index_mask=index_mask, logged=logged)
+            col_qc.load_column()
+            if attribute != 'nan_fraction':
+                col_qc.drop_nans()
+            attribute_value = attribute_functions[attribute](col_qc)
+
+            fig, ax = plt.subplots(figsize=(6, 6))
+            ax.bar([col], [attribute_value], color='black', alpha=0.7)
+            units = self.get_column_unit(col)
+            if attribute == 'nan_fraction':
+                ax.set_ylabel(attribute)
+            elif logged:
+                ax.set_ylabel(f'{attribute} Log10([{units}])')
+            else:
+                ax.set_ylabel(f'{attribute} [{units}]')
+            ax.set_title(f'{self.region_name} - {attribute} for {col}\nBag: {bag_name} | Masked on: {mask}')
+            ax.grid(True, axis='y', linestyle='--', alpha=0.5)
+            plt.tight_layout()
+
+            if save_location:
+                if use_dir:
+                    output_path = os.path.join(save_location, f'{self.region_name}_{bag_name}_{col}_{attribute}.png')
+                else:
+                    output_path = f'{file_root}_{col}_{attribute}{file_ext}'
+                plt.savefig(output_path)
+            else:
+                plt.show()
+
+            plt.close(fig)
+            col_qc.clean_up_memory()
 
 
 
