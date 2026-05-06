@@ -4,7 +4,8 @@ from scipy import stats
 import matplotlib.pyplot as plt
 import pyarrow.parquet as pq
 import pyarrow as pa
-
+from matplotlib.patches import Patch
+from scipy.stats import gaussian_kde
 
 class ColumnQC:
     # handle NaNs. 
@@ -19,6 +20,9 @@ class ColumnQC:
         self.photom_col = pd.read_parquet(self.file_path, columns=[self.column_name])
         if self.index_mask is not None:
             self.photom_col = self.photom_col.loc[self.index_mask]
+
+        if self.logged:
+            self.photom_col[self.column_name] = np.log10(self.photom_col[self.column_name])
         return self.photom_col[self.column_name]
 
     
@@ -26,6 +30,15 @@ class ColumnQC:
         total_count = len(self.photom_col[self.column_name])
         nan_count = self.photom_col[self.column_name].isna().sum()
         return nan_count / total_count if total_count > 0 else 0
+    
+
+    def nan_indexs(self):
+        return self.photom_col[self.column_name].isna().index.tolist()
+    
+
+    def drop_nans(self):
+        self.photom_col = self.photom_col.dropna(subset=[self.column_name])
+        return self.photom_col[self.column_name]
 
 
     def plot_hist(self, save_location=None, density=False, log_scale=False):
@@ -40,28 +53,34 @@ class ColumnQC:
             plt.savefig(save_location)
         else:
             plt.show()
-        
+    
+    def min(self):
+        return np.min(self.photom_col[self.column_name])
+    
+
+    def max(self):
+        return np.max(self.photom_col[self.column_name])
+    
 
     def stdev(self):
         return np.std(self.photom_col[self.column_name])
-    
-
-    def skewness(self):
-        return stats.skew(self.photom_col[self.column_name])
-    
-
-    def kurtosis(self):
-        return stats.kurtosis(self.photom_col[self.column_name])
     
 
     def mad(self):
         return np.median(np.abs(self.photom_col[self.column_name] - np.median(self.photom_col[self.column_name])))
     
 
-    def iqr(self):
-        q75, q25 = np.percentile(self.photom_col[self.column_name], [75 ,25])
-        return q75 - q25
+    def sigma_percentiles(self):
+        return np.percentile(self.photom_col[self.column_name], [0, 16, 50, 84, 100])
     
+
+    def quantiles(self):
+        return np.percentile(self.photom_col[self.column_name], [0, 25, 50, 75 ,100])
+    
+
+    def percentiles(self):
+        return np.percentile(self.photom_col[self.column_name], np.arange(0, 101, 1))
+
 
     def three_sigma_outliers(self):
         mean = np.mean(self.photom_col[self.column_name])
@@ -76,9 +95,49 @@ class ColumnQC:
 
 
 class UnivariatePhotomQC:
-    def __init__(self, region_file_path='/Users/sp624AA/Downloads/waves_qc/photometry_WD01.parquet'):
+    def __init__(self, region_file_path='/Users/sp624AA/Downloads/waves_qc/photometry_WD01.parquet',
+                 region_maml_file_path='/Users/sp624AA/Downloads/waves_qc/photometry_WD01.maml',):
         self.region_file_path = region_file_path
-        self.index_mask = None
+        self.region_maml_file_path = region_maml_file_path
+
+        self.flux_masks = ['mask', 'starmask', 'artefact']
+        self.mag_masks = ['mask', 'starmask', 'artefact']
+        self.radii_masks = ['mask', 'starmask', 'artefact']
+
+        # I need to find a way of ready the maml and getting the units automatically. 
+        self.bags_of_columns = {
+            'sky_coordinates': {'columns': None, 'logged': False, 'apply_flags': None},
+
+            'total_fluxes': {'columns': None, 'logged': True, 'apply_flags': self.flux_masks},
+
+            'total_flux_errors': {'columns': None, 'logged': True, 'apply_flags': self.flux_masks},
+
+            'total_uncorrected_fluxes': {'columns': None, 'logged': True, 'apply_flags': self.flux_masks},
+
+            'total_uncorrected_flux_errors': {'columns': None, 'logged': True, 'apply_flags': self.flux_masks},
+
+            'colour_fluxes': {'columns': None, 'logged': True, 'apply_flags': self.flux_masks},
+
+            'colour_flux_errors': {'columns': None, 'logged': True, 'apply_flags': self.flux_masks},
+
+            'fibre_magnitudes': {'columns': None, 'logged': False, 'apply_flags': self.mag_masks},
+
+            'fibre_magnitude_errors': {'columns': None, 'logged': False, 'apply_flags': self.mag_masks},
+
+            'Z_magnitudes': {'columns': None, 'logged': False, 'apply_flags': self.mag_masks},
+
+            'seeings': {'columns': None, 'logged': False, 'apply_flags': None},
+
+            'radii': {'columns': None, 'logged': False, 'apply_flags': self.radii_masks},
+
+            'flags': {'columns': None, 'logged': False, 'apply_flags': None},
+
+            'misc_floats': {'columns': None, 'logged': False, 'apply_flags': None},
+
+            'misc_ints': {'columns': None, 'logged': False, 'apply_flags': None},
+
+            'misc_strings': {'columns': None, 'logged': False, 'apply_flags': None}
+        }
 
 
     def get_column_names(self):
@@ -89,22 +148,11 @@ class UnivariatePhotomQC:
         return pq.read_schema(self.region_file_path).types
     
 
-    def get_column_lenth(self):
+    def get_column_length(self):
         return pq.read_table(self.region_file_path, columns=[self.get_column_names()[0]]).num_rows
 
 
     def sort_columns(self):
-        bags_of_columns = {
-            'sky_coordinates': None,
-            'fluxes': None,
-            'magnitudes': None,
-            'seeings': None,
-            'radii': None,
-            'flags': None,
-            'misc_floats': None,
-            'misc_ints': None,
-            'misc_strings': None
-        }
 
         col_names = self.get_column_names()
         col_types = {name: t for name, t in zip(col_names, self.get_column_types())}
@@ -112,22 +160,30 @@ class UnivariatePhotomQC:
 
         # Name-based theme assignment
         name_based = {
-            'sky_coordinates': lambda col: 'ra_' in col or 'dec_' in col,
-            'fluxes':          lambda col: 'flux_' in col,
-            'magnitudes':      lambda col: 'mag_' in col,
-            'seeings':         lambda col: 'seeing_' in col or 'sky_' in col,
-            'radii':           lambda col: 'radius_' in col,
-            'flags':           lambda col: 'flag_' in col or 'mask_' in col,
+            'sky_coordinates':               lambda col: 'ra_' in col or 'dec_' in col,
+            'total_fluxes':                  lambda col: 'flux_' in col and '_total' in col and '_err' not in col and '_uncorrected' not in col and '_colour' not in col,
+            'total_flux_errors':             lambda col: 'flux_' in col and '_total' in col and '_err' in col and '_uncorrected' not in col and '_colour' not in col,
+            'total_uncorrected_fluxes':      lambda col: 'flux_' in col and '_total' in col and '_uncorrected' in col and '_err' not in col,
+            'total_uncorrected_flux_errors': lambda col: 'flux_' in col and '_total' in col and '_uncorrected' in col and '_err' in col,
+            'colour_fluxes':                 lambda col: 'flux_' in col and '_colour' in col and '_err' not in col,
+            'colour_flux_errors':            lambda col: 'flux_' in col and '_colour' in col and '_err' in col,
+            'fibre_magnitudes':              lambda col: 'mag_fibre_' in col and '_err' not in col,
+            'fibre_magnitude_errors':        lambda col: 'mag_fibre_' in col and '_err' in col,
+            'Z_magnitudes':                  lambda col: 'mag_Z_' in col,
+            'seeings':                       lambda col: 'seeing_' in col or 'sky_' in col,
+            'radii':                         lambda col: 'radius_' in col,
+            'flags':                         lambda col: 'flag_' in col or 'mask_' in col,
         }
 
         for bag, match_fn in name_based.items():
-            bags_of_columns[bag] = [col for col in col_names if match_fn(col)]
+            matched = [col for col in col_names if match_fn(col)]
+            self.bags_of_columns[bag]['columns'] = matched  # ← update 'columns' key
             remaining_cols = [col for col in remaining_cols if not match_fn(col)]
 
         # Type-based assignment for remaining columns
         float_types = (pa.float32(), pa.float64())
         int_types   = (pa.int8(), pa.int16(), pa.int32(), pa.int64(),
-                       pa.uint8(), pa.uint16(), pa.uint32(), pa.uint64())
+                    pa.uint8(), pa.uint16(), pa.uint32(), pa.uint64())
 
         misc_floats, misc_ints, misc_strings = [], [], []
         for col in remaining_cols:
@@ -139,12 +195,12 @@ class UnivariatePhotomQC:
             else:
                 misc_strings.append(col)
 
-        bags_of_columns['misc_floats']  = misc_floats
-        bags_of_columns['misc_ints']    = misc_ints
-        bags_of_columns['misc_strings'] = misc_strings
+        self.bags_of_columns['misc_floats']['columns']  = misc_floats   # ← update 'columns' key
+        self.bags_of_columns['misc_ints']['columns']    = misc_ints
+        self.bags_of_columns['misc_strings']['columns'] = misc_strings
 
         # --- Checks ---
-        all_assigned = [col for cols in bags_of_columns.values() for col in cols]
+        all_assigned = [col for bag in self.bags_of_columns.values() for col in bag['columns']]
 
         # 1. No column left unassigned
         unassigned = [col for col in col_names if col not in all_assigned]
@@ -160,23 +216,92 @@ class UnivariatePhotomQC:
         if duplicates:
             raise ValueError(f"The following columns were assigned to multiple themes: {duplicates}")
 
-        return bags_of_columns
+        return self.bags_of_columns
 
             
-    def get_flagged_indexs(self, selection):
-        possible_masks = ['mask', 'starmask', 'ghostmask', 'duplicate', 'patch', 'artefact']
-        if selection not in possible_masks:
-            raise ValueError(f"Selection must be one of {possible_masks}")
+    def get_flagged_indexs(self, selection_columns):
+        # check selection columns is an array
+        if not isinstance(selection_columns, (list, np.ndarray)):
+            raise ValueError("Selection columns must be a list or numpy array")
         
-        length = self.get_column_lenth()
-        selection = np.ones(length, dtype=bool)  # Start with all True
-        for col_sel in selection:
+        possible_masks = ['mask', 'starmask', 'ghostmask', 'duplicate', 'patch', 'artefact']
+        for col in selection_columns:
+            if col not in possible_masks:
+                raise ValueError(f"Selection must be one of {possible_masks}")
+        
+        length = self.get_column_length()
+        selection_indexs = np.ones(length, dtype=bool)  # Start with all True
+        for col_sel in selection_columns:
             sel_name = f'flag_{col_sel}'
             column_selection = pd.read_parquet(self.region_file_path, columns = [sel_name])[sel_name] == 1
-            selection &= column_selection.values  # Combine with AND
+            selection_indexs &= column_selection.values  # Combine with AND
 
-        return selection
-    
+        return selection_indexs
+
+
+    def plot_pdfs_per_bag(self, bag_name, save_location=None):
+        if bag_name not in self.bags_of_columns:
+            raise ValueError(f"Bag name '{bag_name}' not found. Available bags: {list(self.bags_of_columns.keys())}")
+        columns = self.bags_of_columns[bag_name]['columns']
+        logged = self.bags_of_columns[bag_name]['logged']
+        mask = self.bags_of_columns[bag_name]['apply_flags']
+        if mask:
+            index_mask = self.get_flagged_indexs(mask)
+        if not columns:
+            raise ValueError(f"No columns found in bag '{bag_name}'")
+
+        percentiles_dict = {}
+        minmax_dict = {}
+        for col in columns:
+            col_qc = ColumnQC(column_name=col, file_path=self.region_file_path, index_mask=index_mask, logged=logged)
+            col_qc.load_column()
+            col_qc.drop_nans()
+            percentiles_dict[col] = col_qc.percentiles()       # 100 percentiles for PDF shape
+            minmax_dict[col] = col_qc.min(), col_qc.max()    # [min, max]
+            col_qc.clean_up_memory()
+
+        fig, ax = plt.subplots(figsize=(max(8, len(columns) * 1.5), 6))
+        positions = range(1, len(columns) + 1)
+
+        for pos, col in zip(positions, columns):
+            all_percentiles = percentiles_dict[col]   # shape (100,)
+            p0, p100 = minmax_dict[col]
+
+            # --- Violin shape via KDE on the 100 percentile values ---
+            y_range = np.linspace(p0, p100, 100)
+            density = all_percentiles
+            violin_width = 0.35
+            density_scaled = density / density.max() * violin_width
+
+            # Fill violin
+            ax.fill_betweenx(y_range, pos, pos + density_scaled,
+                            alpha=0.4, color='black', zorder=2)
+            #ax.plot(pos - density_scaled, y_range, color='black', linewidth=0.8, zorder=2)
+            ax.plot(pos + density_scaled, y_range, color='black', linewidth=0.8, zorder=2)
+
+
+        ax.set_xticks(list(positions))
+        ax.set_xticklabels(columns, rotation=45, ha='right')
+        ax.set_xlim(0.5, len(columns) + 0.5)
+        ax.set_xlabel('Columns')
+        ax.set_ylabel('Value')
+        ax.set_title(f'Sigma Percentile Distributions for {bag_name}')
+        ax.grid(True, axis='y', linestyle='--', alpha=0.5)
+
+        plt.tight_layout()
+        if save_location:
+            plt.savefig(save_location)
+        else:
+            plt.show()
         
 
-        
+    def plot_single_pdf(self, save_location=None):
+        pass
+
+
+    def plot_bar_charts_per_bag(self, bag_name, save_location=None):
+        pass
+
+
+    def plot_single_bar_chart(self, save_location=None):
+        pass
