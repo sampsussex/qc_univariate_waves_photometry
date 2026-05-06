@@ -120,14 +120,14 @@ class UnivariatePhotomQC:
         self.mag_masks = ['mask', 'starmask', 'artefact']
         self.radii_masks = ['mask', 'starmask', 'artefact']
 
-        self.coord_plots = {'pdf': 'bag', 'bar': ['min', 'max', 'nan_fraction']}
+        self.coord_plots = {'pdf': None, 'bar': ['min', 'max', 'nan_fraction']}
         self.flux_plots = {'pdf': 'bag', 'bar': ['min', 'max', 'mean', 'median', 'stdev', 'mad', '3_sigma_outliers', 'nan_fraction']}
         self.mag_plots = {'pdf': 'bag', 'bar': ['min', 'max', 'mean', 'median', 'stdev', 'mad', '3_sigma_outliers', 'nan_fraction']}
         self.seeing_plots = {'pdf': 'bag', 'bar': ['min', 'max', 'mean', 'median', 'stdev', 'mad', '3_sigma_outliers', 'nan_fraction']}
         self.radii_plots = {'pdf': 'bag', 'bar': ['min', 'max', 'mean', 'median', 'stdev', 'mad', '3_sigma_outliers', 'nan_fraction']}
         self.flags_plots = {'bar': ['nan_fraction']}
-        self.misc_floats_plots = {'pdf': 'single', 'bar': ['min', 'max', 'mean', 'median', 'stdev', 'mad', '3_sigma_outliers', 'nan_fraction']}
-        self.misc_ints_plots = {'pdf': None, 'bar': ['min', 'max', 'mean', 'median', 'stdev', 'mad', '3_sigma_outliers', 'nan_fraction']}
+        self.misc_floats_plots = {'pdf': 'single', 'bar': ['3_sigma_outliers', 'nan_fraction']}
+        self.misc_ints_plots = {'pdf': 'single', 'bar': ['3_sigma_outliers', 'nan_fraction']}
         self.misc_strings_plots = {'pdf': None, 'bar': ['nan_fraction']}
 
         # I need to find a way of ready the maml and getting the units automatically. 
@@ -292,6 +292,9 @@ class UnivariatePhotomQC:
         mask = self.bags_of_columns[bag_name]['apply_flags']
         if mask:
             index_mask = self.get_flagged_indexs(mask)
+        else:
+            index_mask = None
+
         if not columns:
             raise ValueError(f"No columns found in bag '{bag_name}'")
 
@@ -342,6 +345,7 @@ class UnivariatePhotomQC:
             plt.savefig(save_location)
         else:
             plt.show()
+        plt.close(fig)
         
 
     def plot_single_pdfs_per_bag(self, bag_name, save_location=None):
@@ -397,6 +401,8 @@ class UnivariatePhotomQC:
         mask = self.bags_of_columns[bag_name]['apply_flags']
         if mask:
             index_mask = self.get_flagged_indexs(mask)
+        else:
+            index_mask = None
         if not columns:
             raise ValueError(f"No columns found in bag '{bag_name}'")
         
@@ -438,7 +444,7 @@ class UnivariatePhotomQC:
             plt.savefig(save_location)
         else:
             plt.show()
-
+        plt.close(fig)
 
     def make_all_plots(self):
         for bag_name, bag_info in self.bags_of_columns.items():
@@ -473,10 +479,10 @@ def main():
     argparser.add_argument('--save_dir', type=str, default='/Users/sp624AA/Downloads/waves_qc/plots', help='Directory to save the plots')
     args = argparser.parse_args()
 
+    print(f"Running univariate QC for region: {args.region_name}")
     qc = UnivariatePhotomQC(region_file_path=args.region_file_path, region_maml_file_path=args.region_maml_file_path, region_name=args.region_name)
-
     qc.make_all_plots()
-
+    print('Done!')
 
 if __name__ == "__main__":
     main()
