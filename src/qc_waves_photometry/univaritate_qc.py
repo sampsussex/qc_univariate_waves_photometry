@@ -110,7 +110,7 @@ class ColumnQC:
     def three_sigma_outliers(self):
         mean = self.mean()
         std_dev = self.stdev()
-        outliers = self.photom_col[np.abs(self.photom_col[self.column_name] - mean) > 3 * std_dev] / len(self.photom_col[self.column_name])
+        outliers = len(self.photom_col[np.abs(self.photom_col[self.column_name] - mean) > 3 * std_dev]) / len(self.photom_col[self.column_name])
         return outliers
     
 
@@ -141,10 +141,9 @@ class UnivariatePhotomQC:
         self.radii_plots = {'pdf': 'bag', 'bar': ['min', 'max', 'mean', 'median', 'stdev', 'mad', '3_sigma_outliers', 'nan_fraction']}
         self.flags_plots = {'bar': ['nan_fraction']}
         self.misc_floats_plots = {'pdf': 'single', 'bar': ['3_sigma_outliers', 'nan_fraction']}
-        self.misc_ints_plots = {'pdf': 'single', 'bar': ['3_sigma_outliers', 'nan_fraction']}
+        self.misc_ints_plots = {'pdf': None, 'bar': ['3_sigma_outliers', 'nan_fraction']}
         self.misc_strings_plots = {'pdf': None, 'bar': ['nan_fraction']}
 
-        # I need to find a way of ready the maml and getting the units automatically. 
         self.bags_of_columns = {
             # Each bag contains:
             # - columns: populated later by _sort_columns()
@@ -425,12 +424,13 @@ class UnivariatePhotomQC:
             else:
                 ax.set_xlabel(f'[{units}]')
             ax.set_ylabel('Density')
-            ax.set_title(f'{self.region_name} - PDF for {col}\nBag: {bag_name} | Masked on: {mask}')
+            ax.set_title(f'{self.region_name} - PDF for {col}\nGroup: {bag_name} | Masked on: {mask}')
             ax.grid(True, axis='y', linestyle='--', alpha=0.5)
             plt.tight_layout()
 
             if save_location:
-                plt.savefig(save_location)
+                col_save_location = save_location + f'_{col}.png'
+                plt.savefig(col_save_location)
             else:
                 plt.show()
 
@@ -461,7 +461,7 @@ class UnivariatePhotomQC:
             'median': lambda qc: qc.median(),
             'stdev': lambda qc: qc.stdev(),
             'mad': lambda qc: qc.mad(),
-            '3_sigma_outliers': lambda qc: len(qc.three_sigma_outliers()),
+            '3_sigma_outliers': lambda qc: qc.three_sigma_outliers(),
             'nan_fraction': lambda qc: qc.nan_fraction()
         }
         if attribute not in attribute_functions:
@@ -516,11 +516,10 @@ class UnivariatePhotomQC:
 
             elif 'pdf' in plots and plots['pdf'] == 'single':
                 # One file per column for bags configured as "single".
-                for col in self.bags_of_columns[bag_name]['columns']:
-                    save_loc = os.path.join(self.save_dir, f'{bag_name}/pdfs/{self.region_name}/{col}_single_pdfs.png')
-                    # create directory if it doesn't exist
-                    os.makedirs(os.path.dirname(save_loc), exist_ok=True)
-                    self.plot_single_pdfs_per_bag(bag_name, save_location=save_loc)
+                save_loc = os.path.join(self.save_dir, f'{bag_name}/pdfs/{self.region_name}/single_pdf')
+                # create directory if it doesn't exist
+                os.makedirs(os.path.dirname(save_loc), exist_ok=True)
+                self.plot_single_pdfs_per_bag(bag_name, save_location=save_loc)
             
             if 'bar' in plots:
                 # Emit each requested bar-chart metric for this bag.
