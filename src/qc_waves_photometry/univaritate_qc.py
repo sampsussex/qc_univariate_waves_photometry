@@ -485,7 +485,7 @@ class UnivariatePhotomQC:
         ax.set_xlabel('Columns')
         if attribute == 'nan_fraction':
             ax.set_ylabel('Fraction')
-        if attribute == '3_sigma_outliers':
+        elif attribute == '3_sigma_outliers':
             ax.set_ylabel('Fraction')
         else:
             if logged:
