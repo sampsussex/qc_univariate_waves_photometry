@@ -12,6 +12,9 @@ import yaml
 
 
 class ColumnQC:
+    # This helper class handles QC operations for a *single column* at a time.
+    # It deliberately encapsulates reading, filtering, stats, and plotting logic
+    # so higher-level orchestration code can stay focused on "which columns to run".
     def __init__ (self, column_name, file_path, index_mask = None, logged = False):
         self.column_name = column_name
         self.file_path = file_path
@@ -20,11 +23,16 @@ class ColumnQC:
 
 
     def load_column(self):
+        # Read only the requested column from parquet to keep memory usage smaller.
         self.photom_col = pd.read_parquet(self.file_path, columns=[self.column_name])
         if self.index_mask is not None:
+            # If a boolean mask is provided, keep only rows that pass the mask.
             self.photom_col = self.photom_col.loc[self.index_mask]
 
         if self.logged:
+            # Optional log10 scaling for quantities such as fluxes/radii.
+            # NOTE: this expects positive values; non-positive values would become
+            # invalid/-inf and should be handled upstream if present.
             self.photom_col[self.column_name] = np.log10(self.photom_col[self.column_name])
         return self.photom_col[self.column_name]
 
@@ -40,6 +48,7 @@ class ColumnQC:
     
 
     def drop_nans(self):
+        # Most statistics are computed on finite data only, so we remove NaNs here.
         self.photom_col = self.photom_col.dropna(subset=[self.column_name])
         return self.photom_col[self.column_name]
 
@@ -107,6 +116,7 @@ class ColumnQC:
 
 
 class UnivariatePhotomQC:
+    # Main orchestration class for bagging columns and generating all QC outputs.
     def __init__(self, region_file_path='/Users/sp624AA/Downloads/waves_qc/photometry_WD01.parquet',
                  region_maml_file_path='/Users/sp624AA/Downloads/waves_qc/photometry_WD01.maml',
                  region_name='WD01',
@@ -165,6 +175,8 @@ class UnivariatePhotomQC:
             'misc_strings': {'columns': None, 'logged': False, 'apply_flags': None, 'plots': self.misc_strings_plots}
         }
 
+        # Build internal structures immediately during initialization so the object
+        # is ready to run plots right away.
         self._sort_columns()
         self._get_unit_lookup_table()
 
@@ -181,6 +193,8 @@ class UnivariatePhotomQC:
     
 
     def _get_unit_lookup_table(self):
+        # Parse the metadata file and build a dict from column name -> unit.
+        # This is used to label axes in plots.
         with open(self.region_maml_file_path, 'r', encoding='utf-8') as f:
             metadata = yaml.safe_load(f)
 
@@ -197,6 +211,8 @@ class UnivariatePhotomQC:
 
 
     def _sort_columns(self):
+        # Group columns into themed "bags" based on naming conventions first,
+        # then fall back to datatype-based buckets for anything left over.
 
         col_names = self.get_column_names()
         col_types = {name: t for name, t in zip(col_names, self.get_column_types())}
@@ -220,6 +236,8 @@ class UnivariatePhotomQC:
         }
 
         for bag, match_fn in name_based.items():
+            # For each bag, collect matching columns and remove them from the
+            # set of columns that still need assignment.
             matched = [col for col in col_names if match_fn(col)]
             self.bags_of_columns[bag]['columns'] = matched  # ← update 'columns' key
             remaining_cols = [col for col in remaining_cols if not match_fn(col)]
@@ -243,7 +261,8 @@ class UnivariatePhotomQC:
         self.bags_of_columns['misc_ints']['columns']    = misc_ints
         self.bags_of_columns['misc_strings']['columns'] = misc_strings
 
-        # --- Checks ---
+        # --- Sanity checks ---
+        # These checks protect against silent misconfiguration.
         all_assigned = [col for bag in self.bags_of_columns.values() for col in bag['columns']]
 
         # 1. No column left unassigned
@@ -273,6 +292,7 @@ class UnivariatePhotomQC:
             if col not in possible_masks:
                 raise ValueError(f"Selection must be one of {possible_masks}")
         
+        # Build one combined boolean mask (logical AND across selected flags).
         length = self.get_column_length()
         selection_indexs = np.ones(length, dtype=bool)  # Start with all True
         for col_sel in selection_columns:
@@ -298,6 +318,7 @@ class UnivariatePhotomQC:
         if not columns:
             raise ValueError(f"No columns found in bag '{bag_name}'")
 
+        # We summarize each column by percentiles and approximate shape using KDE.
         percentiles_dict = {}
         minmax_dict = {}
         for col in columns:
@@ -315,7 +336,7 @@ class UnivariatePhotomQC:
             all_percentiles = percentiles_dict[col]   # shape (100,)
             p0, p100 = minmax_dict[col]
 
-            # --- pdf shape via KDE on the 100 percentile values ---
+            # --- PDF-like shape via KDE on percentile samples ---
             kde = gaussian_kde(all_percentiles)
             y_range = np.linspace(p0, p100, 101)
             density = kde(y_range)
@@ -366,6 +387,7 @@ class UnivariatePhotomQC:
             values = col_qc.load_column().dropna().to_numpy()
 
             fig, ax = plt.subplots(figsize=(8, 6))
+            # Plot a normalized histogram and overlay KDE when enough variation exists.
             if values.size:
                 ax.hist(values, bins=50, density=True, color='black', alpha=0.35)
                 if values.size > 1 and values.min() != values.max():
@@ -406,6 +428,7 @@ class UnivariatePhotomQC:
         if not columns:
             raise ValueError(f"No columns found in bag '{bag_name}'")
         
+        # Dispatch table mapping metric names to calculation callables.
         attribute_functions = {
             'min': lambda qc: qc.min(),
             'max': lambda qc: qc.max(),
@@ -453,6 +476,7 @@ class UnivariatePhotomQC:
         plt.close(fig)
 
     def make_all_plots(self):
+        # Iterate over all bags and emit each configured plot type.
         for bag_name, bag_info in self.bags_of_columns.items():
             plots = bag_info['plots']
             if 'pdf' in plots and plots['pdf'] == 'bag':
@@ -478,6 +502,7 @@ class UnivariatePhotomQC:
 
 
 def main():
+    # CLI entry point: parse arguments, build QC object, run all configured plots.
     argparser = argparse.ArgumentParser(description='Univariate QC for photometry data')
     argparser.add_argument('--region_file_path', type=str, default='/Users/sp624AA/Downloads/waves_qc/photometry_WD01.parquet', help='Path to the region parquet file')
     argparser.add_argument('--region_maml_file_path', type=str, default='/Users/sp624AA/Downloads/waves_qc/photometry_WD01.maml', help='Path to the region maml file')
