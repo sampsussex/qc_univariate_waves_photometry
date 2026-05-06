@@ -38,12 +38,15 @@ class ColumnQC:
 
     
     def nan_fraction(self):
+        # Count total rows and rows with missing values, then convert to a fraction.
+        # Returning 0 for empty input avoids divide-by-zero errors.
         total_count = len(self.photom_col[self.column_name])
         nan_count = self.photom_col[self.column_name].isna().sum()
         return nan_count / total_count if total_count > 0 else 0
     
 
     def nan_indexs(self):
+        # Return the DataFrame index values for quick traceability back to source rows.
         return self.photom_col[self.column_name].isna().index.tolist()
     
 
@@ -68,6 +71,7 @@ class ColumnQC:
     
 
     def min(self):
+        # Small helper wrappers keep all metric calculations in one class.
         return np.min(self.photom_col[self.column_name])
     
 
@@ -142,6 +146,11 @@ class UnivariatePhotomQC:
 
         # I need to find a way of ready the maml and getting the units automatically. 
         self.bags_of_columns = {
+            # Each bag contains:
+            # - columns: populated later by _sort_columns()
+            # - logged: whether values are log10 transformed before computing stats/plots
+            # - apply_flags: which flag columns must be true (==1) for row selection
+            # - plots: which plot modes/metrics should be generated
             'sky_coordinates': {'columns': None, 'logged': False, 'apply_flags': None, 'plots': self.coord_plots},
 
             'total_fluxes': {'columns': None, 'logged': True, 'apply_flags': self.flux_masks, 'plots': self.flux_plots},
@@ -181,14 +190,17 @@ class UnivariatePhotomQC:
         self._get_unit_lookup_table()
 
     def get_column_names(self):
+        # Read schema only (fast) to discover available column names.
         return pq.read_schema(self.region_file_path).names
     
 
     def get_column_types(self):
+        # Read schema types in parallel with column names for downstream bucketing.
         return pq.read_schema(self.region_file_path).types
     
 
     def get_column_length(self):
+        # Read only one column to get table row count without loading full dataset.
         return pq.read_table(self.region_file_path, columns=[self.get_column_names()[0]]).num_rows
     
 
@@ -207,6 +219,7 @@ class UnivariatePhotomQC:
     }
 
     def get_column_unit(self, column_name):
+        # Unit may be missing in metadata; .get() safely returns None in that case.
         return self.units_by_column.get(column_name)
 
 
@@ -249,6 +262,7 @@ class UnivariatePhotomQC:
 
         misc_floats, misc_ints, misc_strings = [], [], []
         for col in remaining_cols:
+            # Anything not caught by naming rules is categorized by parquet type.
             t = col_types[col]
             if t in float_types:
                 misc_floats.append(col)
@@ -296,6 +310,7 @@ class UnivariatePhotomQC:
         length = self.get_column_length()
         selection_indexs = np.ones(length, dtype=bool)  # Start with all True
         for col_sel in selection_columns:
+            # Flag columns are named like "flag_mask", "flag_starmask", etc.
             sel_name = f'flag_{col_sel}'
             column_selection = pd.read_parquet(self.region_file_path, columns = [sel_name])[sel_name] == 1
             selection_indexs &= column_selection.values  # Combine with AND
@@ -310,6 +325,7 @@ class UnivariatePhotomQC:
         columns = self.bags_of_columns[bag_name]['columns']
         logged = self.bags_of_columns[bag_name]['logged']
         mask = self.bags_of_columns[bag_name]['apply_flags']
+        # Build row-selection mask once per bag, then reuse for each column.
         if mask:
             index_mask = self.get_flagged_indexs(mask)
         else:
@@ -322,6 +338,10 @@ class UnivariatePhotomQC:
         percentiles_dict = {}
         minmax_dict = {}
         for col in columns:
+            # For each column:
+            # 1) load data (+ optional row mask / log transform),
+            # 2) remove NaNs,
+            # 3) cache percentiles and min/max for plotting.
             col_qc = ColumnQC(column_name=col, file_path=self.region_file_path, index_mask=index_mask, logged=logged)
             col_qc.load_column()
             col_qc.drop_nans()
@@ -337,6 +357,8 @@ class UnivariatePhotomQC:
             p0, p100 = minmax_dict[col]
 
             # --- PDF-like shape via KDE on percentile samples ---
+            # We estimate a smooth density profile from percentile samples, then
+            # draw it as a one-sided violin for each column position.
             kde = gaussian_kde(all_percentiles)
             y_range = np.linspace(p0, p100, 101)
             density = kde(y_range)
@@ -350,6 +372,7 @@ class UnivariatePhotomQC:
             ax.plot(pos + density_scaled, y_range, color='black', linewidth=0.8, zorder=2)
 
         units = self.get_column_unit(columns[0])  # Assuming all columns in the bag have the same unit
+        # Configure all axis labels/ticks once after drawing every column.
         ax.set_xticks(list(positions))
         ax.set_xticklabels(columns, rotation=45, ha='right')
         ax.set_xlim(0.5, len(columns) + 0.5)
@@ -383,12 +406,14 @@ class UnivariatePhotomQC:
 
 
         for col in columns:
+            # Generate one standalone PDF-style plot per column.
             col_qc = ColumnQC(column_name=col, file_path=self.region_file_path, index_mask=index_mask, logged=logged)
             values = col_qc.load_column().dropna().to_numpy()
 
             fig, ax = plt.subplots(figsize=(8, 6))
             # Plot a normalized histogram and overlay KDE when enough variation exists.
             if values.size:
+                # Histogram gives empirical distribution; KDE gives a smooth trend line.
                 ax.hist(values, bins=50, density=True, color='black', alpha=0.35)
                 if values.size > 1 and values.min() != values.max():
                     x_range = np.linspace(values.min(), values.max(), 200)
@@ -443,9 +468,11 @@ class UnivariatePhotomQC:
             raise ValueError(f"Attribute '{attribute}' not recognized. Available attributes: {list(attribute_functions.keys())}")
         attribute_values = []
         for col in columns:
+            # Compute the selected metric independently for each column.
             col_qc = ColumnQC(column_name=col, file_path=self.region_file_path, index_mask=index_mask, logged=logged)
             col_qc.load_column()
             if attribute != 'nan_fraction':
+                # NaN fraction must include NaNs; all other metrics are finite-only.
                 col_qc.drop_nans()
             attribute_value = attribute_functions[attribute](col_qc)
             attribute_values.append(attribute_value)
@@ -480,6 +507,7 @@ class UnivariatePhotomQC:
         for bag_name, bag_info in self.bags_of_columns.items():
             plots = bag_info['plots']
             if 'pdf' in plots and plots['pdf'] == 'bag':
+                # One combined PDF summary image for the entire bag.
                 save_loc = os.path.join(self.save_dir, f'{bag_name}/pdfs/{self.region_name}/{bag_name}_pdfs.png')
                 # create directory if it doesn't exist
                 os.makedirs(os.path.dirname(save_loc), exist_ok=True)
@@ -487,6 +515,7 @@ class UnivariatePhotomQC:
 
 
             elif 'pdf' in plots and plots['pdf'] == 'single':
+                # One file per column for bags configured as "single".
                 for col in self.bags_of_columns[bag_name]['columns']:
                     save_loc = os.path.join(self.save_dir, f'{bag_name}/pdfs/{self.region_name}/{col}_single_pdfs.png')
                     # create directory if it doesn't exist
@@ -494,6 +523,7 @@ class UnivariatePhotomQC:
                     self.plot_single_pdfs_per_bag(bag_name, save_location=save_loc)
             
             if 'bar' in plots:
+                # Emit each requested bar-chart metric for this bag.
                 for attribute in plots['bar']:
                     self.save_loc = os.path.join(self.save_dir, f'{bag_name}/bar_charts/{self.region_name}/{bag_name}_{attribute}_bar.png')
                     # create directory if it doesn't exist
@@ -510,6 +540,8 @@ def main():
     argparser.add_argument('--save_dir', type=str, default='/Users/sp624AA/Downloads/waves_qc/plots', help='Directory to save the plots')
     args = argparser.parse_args()
 
+    # Run full orchestration: initialize object (which sorts columns + units),
+    # then generate all requested outputs.
     print(f"Running univariate QC for region: {args.region_name}")
     qc = UnivariatePhotomQC(region_file_path=args.region_file_path, region_maml_file_path=args.region_maml_file_path, region_name=args.region_name)
     qc.make_all_plots()
