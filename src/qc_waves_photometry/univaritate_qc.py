@@ -10,6 +10,8 @@ from scipy.stats import gaussian_kde
 import argparse
 import yaml
 
+# TODO// check negative handling for logged columns.
+
 
 class ColumnQC:
     # This helper class handles QC operations for a *single column* at a time.
@@ -131,13 +133,14 @@ class UnivariatePhotomQC:
         self.save_dir = save_dir
 
         self.flux_masks = ['mask', 'starmask', 'artefact']
-        self.mag_masks = ['mask', 'starmask', 'artefact']
+        self.mag_masks = ['mask', 'starmask', 'artefact'] # 'Z<22'
         self.radii_masks = ['mask', 'starmask', 'artefact']
 
         self.coord_plots = {'pdf': None, 'bar': ['min', 'max', 'nan_fraction']}
         self.flux_plots = {'pdf': 'bag', 'bar': ['min', 'max', 'mean', 'median', 'stdev', 'mad', '3_sigma_outliers', 'nan_fraction']}
         self.mag_plots = {'pdf': 'bag', 'bar': ['min', 'max', 'mean', 'median', 'stdev', 'mad', '3_sigma_outliers', 'nan_fraction']}
         self.seeing_plots = {'pdf': 'bag', 'bar': ['min', 'max', 'mean', 'median', 'stdev', 'mad', '3_sigma_outliers', 'nan_fraction']}
+        self.sky_plots = {'pdf': 'bag', 'bar': ['min', 'max', 'mean', 'median', 'stdev', 'mad', '3_sigma_outliers', 'nan_fraction']}
         self.radii_plots = {'pdf': 'bag', 'bar': ['min', 'max', 'mean', 'median', 'stdev', 'mad', '3_sigma_outliers', 'nan_fraction']}
         self.flags_plots = {'bar': ['nan_fraction']}
         self.misc_floats_plots = {'pdf': 'single', 'bar': ['3_sigma_outliers', 'nan_fraction']}
@@ -171,6 +174,8 @@ class UnivariatePhotomQC:
             'Z_magnitudes': {'columns': None, 'logged': False, 'apply_flags': self.mag_masks, 'plots': self.mag_plots},
 
             'seeings': {'columns': None, 'logged': False, 'apply_flags': None, 'plots': self.seeing_plots},
+
+            'skies': {'columns': None, 'logged': False, 'apply_flags': None, 'plots': self.sky_plots},
 
             'radii': {'columns': None, 'logged': True, 'apply_flags': self.radii_masks, 'plots': self.radii_plots},
 
@@ -241,8 +246,9 @@ class UnivariatePhotomQC:
             'colour_flux_errors':            lambda col: 'flux_' in col and '_colour' in col and '_err' in col,
             'fibre_magnitudes':              lambda col: 'mag_fibre_' in col and '_err' not in col,
             'fibre_magnitude_errors':        lambda col: 'mag_fibre_' in col and '_err' in col,
-            'Z_magnitudes':                  lambda col: 'mag_Z_' in col,
-            'seeings':                       lambda col: 'seeing_' in col or 'sky_' in col,
+            'Z_magnitudes':                  lambda col: 'mag_Z_' in col or 'mag_detection' in col,
+            'seeings':                       lambda col: 'seeing_' in col,
+            'skies':                         lambda col: 'sky_' in col,
             'radii':                         lambda col: 'radius_' in col,
             'flags':                         lambda col: 'flag_' in col or 'mask_' in col,
         }
@@ -300,7 +306,7 @@ class UnivariatePhotomQC:
         if not isinstance(selection_columns, (list, np.ndarray)):
             raise ValueError("Selection columns must be a list or numpy array")
         
-        possible_masks = ['mask', 'starmask', 'ghostmask', 'duplicate', 'patch', 'artefact']
+        possible_masks = ['mask', 'starmask', 'ghostmask', 'duplicate', 'patch', 'artefact', 'Z<22']
         for col in selection_columns:
             if col not in possible_masks:
                 raise ValueError(f"Selection must be one of {possible_masks}")
@@ -310,9 +316,15 @@ class UnivariatePhotomQC:
         selection_indexs = np.ones(length, dtype=bool)  # Start with all True
         for col_sel in selection_columns:
             # Flag columns are named like "flag_mask", "flag_starmask", etc.
-            sel_name = f'flag_{col_sel}'
-            column_selection = pd.read_parquet(self.region_file_path, columns = [sel_name])[sel_name] == 1
-            selection_indexs &= column_selection.values  # Combine with AND
+            if col_sel != 'Z<22':
+                sel_name = f'flag_{col_sel}'
+                column_selection = pd.read_parquet(self.region_file_path, columns = [sel_name])[sel_name] == 1
+                selection_indexs &= column_selection.values  # Combine with AND
+            if col_sel == 'Z<22':
+                sel_name = 'mag_Z_VISTA_total'
+                column_selection = pd.read_parquet(self.region_file_path, columns = [sel_name])
+                column_selection = (~column_selection[sel_name].isna()) &(column_selection[sel_name] < 22.)
+                selection_indexs &= column_selection  # Combine with AND
 
         return selection_indexs
 
@@ -357,12 +369,11 @@ class UnivariatePhotomQC:
 
             # --- PDF-like shape via KDE on percentile samples ---
             # We estimate a smooth density profile from percentile samples, then
-            # draw it as a one-sided violin for each column position.
             kde = gaussian_kde(all_percentiles)
             y_range = np.linspace(p0, p100, 101)
             density = kde(y_range)
-            violin_width = 0.95
-            density_scaled = density / density.max() * violin_width
+            width = 0.95
+            density_scaled = density / density.max() * width
 
             # Fill pdf
             pos = pos - 0.95/2
@@ -376,6 +387,8 @@ class UnivariatePhotomQC:
         ax.set_xticklabels(columns, rotation=45, ha='right')
         ax.set_xlim(0.5, len(columns) + 0.5)
         ax.set_xlabel('Columns')
+
+
         if logged:
             ax.set_ylabel(f'Log10([{units}])')
         else:
@@ -483,6 +496,7 @@ class UnivariatePhotomQC:
         ax.set_xticks(range(len(columns)))
         ax.set_xticklabels(columns, rotation=45, ha='right')
         ax.set_xlabel('Columns')
+
         if attribute == 'nan_fraction':
             ax.set_ylabel('Fraction')
         elif attribute == '3_sigma_outliers':
@@ -508,7 +522,7 @@ class UnivariatePhotomQC:
             plots = bag_info['plots']
             if 'pdf' in plots and plots['pdf'] == 'bag':
                 # One combined PDF summary image for the entire bag.
-                save_loc = os.path.join(self.save_dir, f'{bag_name}/pdfs/{self.region_name}/{bag_name}_pdfs.png')
+                save_loc = os.path.join(self.save_dir, f'{bag_name}/pdfs/{self.region_name}_{bag_name}_pdfs.png')
                 # create directory if it doesn't exist
                 os.makedirs(os.path.dirname(save_loc), exist_ok=True)
                 self.plot_pdfs_per_bag(bag_name, save_location=save_loc)
