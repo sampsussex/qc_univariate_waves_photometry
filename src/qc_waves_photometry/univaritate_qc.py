@@ -10,8 +10,13 @@ from scipy.stats import gaussian_kde
 import argparse
 import yaml
 
-# TODO// check negative handling for logged columns.
 
+def safe(callable_, default=np.nan):
+    try:
+        return callable_()
+    except Exception:
+        return default
+    
 
 class ColumnQC:
     # This helper class handles QC operations for a *single column* at a time.
@@ -107,6 +112,13 @@ class ColumnQC:
 
     def percentiles(self):
         return np.percentile(self.photom_col[self.column_name], np.arange(0, 101, 1))
+    
+
+    def zero_or_below_fraction(self):
+        # This is a common check for fluxes/radii to identify potential issues with non-positive values.
+        total_count = len(self.photom_col[self.column_name])
+        zero_or_below_count = (self.photom_col[self.column_name] <= 0).sum()
+        return zero_or_below_count / total_count if total_count > 0 else 0
 
 
     def three_sigma_outliers(self):
@@ -114,6 +126,46 @@ class ColumnQC:
         std_dev = self.stdev()
         outliers = len(self.photom_col[np.abs(self.photom_col[self.column_name] - mean) > 3 * std_dev]) / len(self.photom_col[self.column_name])
         return outliers
+    
+
+    def build_table_row(self):
+        nan_frac = self.nan_fraction()
+        self.drop_nans()
+
+        s = self.photom_col[self.column_name]
+        is_numeric = pd.api.types.is_numeric_dtype(s)
+
+        row = {
+            'column': self.column_name,
+            'nan_fraction': nan_frac,
+            'min': np.nan,
+            'max': np.nan,
+            'mean': np.nan,
+            'median': np.nan,
+            'stdev': np.nan,
+            'mad': np.nan,
+            'zero_or_below_fraction': np.nan,
+            '3_sigma_outliers': np.nan,
+        }
+
+        if is_numeric:
+            row.update({
+                'min': safe(self.min),
+                'max': safe(self.max),
+                'mean': safe(self.mean),
+                'median': safe(self.median),
+                'stdev': safe(self.stdev),
+                'mad': safe(self.mad),
+                'zero_or_below_fraction': safe(self.zero_or_below_fraction),
+                '3_sigma_outliers': safe(self.three_sigma_outliers),
+            })
+        else:
+            row.update({
+                'min': safe(lambda: s.min()),
+                'max': safe(lambda: s.max()),
+            })
+
+        return row
     
 
     def clean_up_memory(self):
@@ -127,6 +179,9 @@ class UnivariatePhotomQC:
                  region_maml_file_path='/Users/sp624AA/Downloads/waves_qc/photometry_WD01.maml',
                  region_name='WD01',
                  save_dir='/Users/sp624AA/Downloads/waves_qc/plots'):
+        valid_region_names = ['WD01', 'WD02', 'WD03', 'WD10', 'WAVES-N', 'WAVES-S']
+        if region_name not in valid_region_names:
+            raise ValueError(f"Invalid region name '{region_name}'. Valid options are: {valid_region_names}")
         self.region_file_path = region_file_path
         self.region_maml_file_path = region_maml_file_path
         self.region_name = region_name
@@ -135,6 +190,7 @@ class UnivariatePhotomQC:
         self.flux_masks = ['mask', 'starmask', 'artefact']
         self.mag_masks = ['mask', 'starmask', 'artefact'] # 'Z<22'
         self.radii_masks = ['mask', 'starmask', 'artefact']
+        self.sky_masks = ['mask', 'starmask', 'ghostmask', 'artefact']
 
         self.coord_plots = {'pdf': None, 'bar': ['min', 'max', 'nan_fraction']}
         self.flux_plots = {'pdf': 'bag', 'bar': ['min', 'max', 'mean', 'median', 'stdev', 'mad', '3_sigma_outliers', 'nan_fraction']}
@@ -175,7 +231,7 @@ class UnivariatePhotomQC:
 
             'seeings': {'columns': None, 'logged': False, 'apply_flags': None, 'plots': self.seeing_plots},
 
-            'skies': {'columns': None, 'logged': False, 'apply_flags': None, 'plots': self.sky_plots},
+            'skies': {'columns': None, 'logged': False, 'apply_flags': self.sky_masks, 'plots': self.sky_plots},
 
             'radii': {'columns': None, 'logged': True, 'apply_flags': self.radii_masks, 'plots': self.radii_plots},
 
@@ -543,6 +599,98 @@ class UnivariatePhotomQC:
                     os.makedirs(os.path.dirname(self.save_loc), exist_ok=True)
                     self.plot_bar_charts_per_bag(bag_name, attribute, save_location=self.save_loc)
 
+    
+    def build_review_tables(self, save_location):
+        # This method is not currently used in the main orchestration, but it could be extended to generate a summary table of all metrics for all columns.
+        # It would iterate over all columns, compute all relevant metrics, and compile them into a single DataFrame for review.
+        rows_sel = []
+        rows_tot = []
+
+        os.makedirs(save_location, exist_ok=True)  # Ensure the save directory exists
+        for bag_name, bag_info in self.bags_of_columns.items():
+            columns = bag_info['columns']
+            logged = bag_info['logged']
+            mask = bag_info['apply_flags']
+            index_mask = self.get_flagged_indexs(mask) if mask else None
+            stripped_mask_string = stripped_mask_string = (''.join(s[0] for s in mask if not s.startswith('Z'))
+                        if mask else 'None')
+            print(f"Processing bag '{bag_name}' with columns: {columns} | Masked on: {mask}")
+            for col in columns:
+                print(f"  Processing column '{col}'")
+                print(f"    Building QC object for column '{col}' with logged={logged} and index_mask={'Yes' if index_mask is not None else 'No'}")
+                col_qc_sel = ColumnQC(column_name=col, file_path=self.region_file_path, index_mask=index_mask, logged=logged)
+                col_qc_sel.load_column()
+                row_sel = col_qc_sel.build_table_row()
+                row_sel['group'] = bag_name  # Add bag name to the row for context
+                row_sel['column'] = col  # Ensure column name is included in the row for traceability
+                row_sel['region'] = self.region_name  # Add region name for additional context
+                row_sel['mask'] = stripped_mask_string  # Add mask info for traceability
+                rows_sel.append(row_sel)
+                col_qc_sel.clean_up_memory()
+
+                print(f"    Building 'most appropriate' QC object for column '{col}' with logged={logged} and no mask")
+                col_qc_tot = ColumnQC(column_name=col, file_path=self.region_file_path, index_mask=None, logged=False)
+                col_qc_tot.load_column()
+                row_tot = col_qc_tot.build_table_row()
+                row_tot['group'] = bag_name  # Add bag name to the row for context
+                row_tot['column'] = col  # Ensure column name is included in the row for traceability
+                row_tot['region'] = self.region_name  # Add region name for additional context
+                row_tot['mask'] = 'None'  # No mask applied for this "most appropriate" reference
+                rows_tot.append(row_tot)
+                col_qc_tot.clean_up_memory()
+                print(f"    Completed column '{col}'")
+        print(f"Completed all columns for region '{self.region_name}'. Building final tables and saving to '{save_location}'")
+        # order of columns in final table
+        col_order = ['group', 'mask', 'region', 'column', 'min', 'max', 'mean', 'median', 'stdev', 'mad', 'nan_fraction', 'zero_or_below_fraction', '3_sigma_outliers']
+
+        review_df_all_values = pd.DataFrame(rows_tot)
+        review_df_all_values = review_df_all_values[col_order]  # Reorder columns for consistency
+        review_df_most_appropriate = pd.DataFrame(rows_sel)
+        review_df_most_appropriate = review_df_most_appropriate[col_order]  # Reorder columns for consistency
+        # Table order. 
+        print(f"Saving review tables to '{save_location}'")
+        review_df_all_values.to_csv(save_location + f'/{self.region_name}_raw_review_table.csv', index=False)
+        review_df_most_appropriate.to_csv(save_location + f'/{self.region_name}_most_appropriate_review_table.csv', index=False)
+        print(f"Review tables saved for region '{self.region_name}' at '{save_location}'")
+        
+    def combine_review_tables_in_dir(self, dir_with_tables):
+        print(f"Combining review tables in directory '{dir_with_tables}' for regions: {', '.join( ['WD01', 'WD02', 'WD03', 'WD10', 'WAVES-N', 'WAVES-S'])}")
+        regions_to_combine = ['WD01', 'WD02', 'WD03', 'WD10', 'WAVES-N', 'WAVES-S']
+        col_order = ['group', 'mask', 'region', 'column', 'min', 'max', 'mean', 'median', 
+                    'stdev', 'mad', 'nan_fraction', 'zero_or_below_fraction', '3_sigma_outliers']
+
+        tables_all = []
+        tables_app = []
+
+        csv_files = [f for f in os.listdir(dir_with_tables) if f.endswith('.csv')]
+
+        for csv_file in csv_files:
+            if not any(region in csv_file for region in regions_to_combine):
+                continue
+
+            df = pd.read_csv(os.path.join(dir_with_tables, csv_file))
+
+            if csv_file.endswith('_raw_review_table.csv'):
+                tables_all.append(df)
+            elif csv_file.endswith('_most_appropriate_review_table.csv'):
+                tables_app.append(df)
+
+        sort_cols = ['group', 'column', 'region']
+
+        if tables_all:
+            combined_all = pd.concat(tables_all, ignore_index=True)
+            combined_all = combined_all[col_order].sort_values(sort_cols).reset_index(drop=True)
+            combined_all.to_csv(os.path.join(dir_with_tables, 'combined_raw_review_table.csv'), index=False)
+
+        if tables_app:
+            combined_app = pd.concat(tables_app, ignore_index=True)
+            combined_app = combined_app[col_order].sort_values(sort_cols).reset_index(drop=True)
+            combined_app.to_csv(os.path.join(dir_with_tables, 'combined_most_appropriate_review_table.csv'), index=False)
+    
+    def make_all_tables(self):
+        self.build_review_tables(save_location=os.path.join(self.save_dir, f'review_tables'))
+        self.combine_review_tables_in_dir(dir_with_tables=os.path.join(self.save_dir, f'review_tables'))
+
 
 def main():
     # CLI entry point: parse arguments, build QC object, run all configured plots.
@@ -550,14 +698,15 @@ def main():
     argparser.add_argument('--region_file_path', type=str, default='/Users/sp624AA/Downloads/waves_qc/photometry_WD01.parquet', help='Path to the region parquet file')
     argparser.add_argument('--region_maml_file_path', type=str, default='/Users/sp624AA/Downloads/waves_qc/photometry_WD01.maml', help='Path to the region maml file')
     argparser.add_argument('--region_name', type=str, default='WD01', help='Name of the region')
-    argparser.add_argument('--save_dir', type=str, default='/Users/sp624AA/Downloads/waves_qc/plots', help='Directory to save the plots')
+    argparser.add_argument('--save_dir', type=str, default='/Users/sp624AA/Downloads/waves_qc/outputs/', help='Directory to save the outputs')
     args = argparser.parse_args()
 
     # Run full orchestration: initialize object (which sorts columns + units),
     # then generate all requested outputs.
     print(f"Running univariate QC for region: {args.region_name}")
-    qc = UnivariatePhotomQC(region_file_path=args.region_file_path, region_maml_file_path=args.region_maml_file_path, region_name=args.region_name)
-    qc.make_all_plots()
+    qc = UnivariatePhotomQC(region_file_path=args.region_file_path, region_maml_file_path=args.region_maml_file_path, region_name=args.region_name, save_dir=args.save_dir)
+    #qc.make_all_plots()
+    qc.make_all_tables()
     print('Done!')
 
 if __name__ == "__main__":
