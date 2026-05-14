@@ -705,7 +705,7 @@ def main():
     # then generate all requested outputs.
     print(f"Running univariate QC for region: {args.region_name}")
     qc = UnivariatePhotomQC(region_file_path=args.region_file_path, region_maml_file_path=args.region_maml_file_path, region_name=args.region_name, save_dir=args.save_dir)
-    #qc.make_all_plots()
+    qc.make_all_plots()
     qc.make_all_tables()
     print('Done!')
 
