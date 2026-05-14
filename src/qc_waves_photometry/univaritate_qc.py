@@ -179,7 +179,7 @@ class UnivariatePhotomQC:
                  region_maml_file_path='/Users/sp624AA/Downloads/waves_qc/photometry_WD01.maml',
                  region_name='WD01',
                  save_dir='/Users/sp624AA/Downloads/waves_qc/plots'):
-        valid_region_names = ['WD01', 'WD02', 'WD03', 'WD10', 'WAVES-N', 'WAVES-S']
+        valid_region_names = ['WD01', 'WD02', 'WD03', 'WD10', 'WAVES-N', 'WAVES-S', 'G09']
         if region_name not in valid_region_names:
             raise ValueError(f"Invalid region name '{region_name}'. Valid options are: {valid_region_names}")
         self.region_file_path = region_file_path
@@ -654,8 +654,8 @@ class UnivariatePhotomQC:
         print(f"Review tables saved for region '{self.region_name}' at '{save_location}'")
         
     def combine_review_tables_in_dir(self, dir_with_tables):
-        print(f"Combining review tables in directory '{dir_with_tables}' for regions: {', '.join( ['WD01', 'WD02', 'WD03', 'WD10', 'WAVES-N', 'WAVES-S'])}")
-        regions_to_combine = ['WD01', 'WD02', 'WD03', 'WD10', 'WAVES-N', 'WAVES-S']
+        print(f"Combining review tables in directory '{dir_with_tables}' for regions: {', '.join( ['WD01', 'WD02', 'WD03', 'WD10', 'WAVES-N', 'WAVES-S', 'G09'])}")
+        regions_to_combine = ['WD01', 'WD02', 'WD03', 'WD10', 'WAVES-N', 'WAVES-S', 'G09']
         col_order = ['group', 'mask', 'region', 'column', 'min', 'max', 'mean', 'median', 
                     'stdev', 'mad', 'nan_fraction', 'zero_or_below_fraction', '3_sigma_outliers']
 
