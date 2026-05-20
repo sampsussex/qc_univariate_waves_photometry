@@ -9,7 +9,8 @@ from matplotlib.patches import Patch
 from scipy.stats import gaussian_kde
 import argparse
 import yaml
-
+# NEED TO FIX CORRECT FLAGGING
+# WD03 is also causing issues, need to fix this.. 
 
 def safe(callable_, default=np.nan):
     try:
@@ -175,9 +176,9 @@ class ColumnQC:
 
 class UnivariatePhotomQC:
     # Main orchestration class for bagging columns and generating all QC outputs.
-    def __init__(self, region_file_path='/Users/sp624AA/Downloads/waves_qc/photometry_WD01.parquet',
-                 region_maml_file_path='/Users/sp624AA/Downloads/waves_qc/photometry_WD01.maml',
-                 region_name='WD01',
+    def __init__(self, region_file_path='/Users/sp624AA/Downloads/waves_qc/photometry_WD03.parquet',
+                 region_maml_file_path='/Users/sp624AA/Downloads/waves_qc/photometry_WD03.maml',
+                 region_name='WD03',
                  save_dir='/Users/sp624AA/Downloads/waves_qc/plots'):
         valid_region_names = ['WD01', 'WD02', 'WD03', 'WD10', 'WAVES-N', 'WAVES-S']
         if region_name not in valid_region_names:
@@ -374,7 +375,7 @@ class UnivariatePhotomQC:
             # Flag columns are named like "flag_mask", "flag_starmask", etc.
             if col_sel != 'Z<22':
                 sel_name = f'flag_{col_sel}'
-                column_selection = pd.read_parquet(self.region_file_path, columns = [sel_name])[sel_name] == 1
+                column_selection = pd.read_parquet(self.region_file_path, columns = [sel_name])[sel_name] == 0
                 selection_indexs &= column_selection.values  # Combine with AND
             if col_sel == 'Z<22':
                 sel_name = 'mag_Z_VISTA_total'
@@ -405,6 +406,7 @@ class UnivariatePhotomQC:
         percentiles_dict = {}
         minmax_dict = {}
         for col in columns:
+            print(f"Processing column '{col}' for PDF plotting in bag '{bag_name}' with logged={logged} and mask={mask}")
             # For each column:
             # 1) load data (+ optional row mask / log transform),
             # 2) remove NaNs,
@@ -420,6 +422,7 @@ class UnivariatePhotomQC:
         positions = range(1, len(columns) + 1)
 
         for pos, col in zip(positions, columns):
+            print(f"Plotting PDF for column '{col}' at position {pos} in bag '{bag_name}'")
             all_percentiles = percentiles_dict[col]   # shape (100,)
             p0, p100 = minmax_dict[col]
 
@@ -695,17 +698,17 @@ class UnivariatePhotomQC:
 def main():
     # CLI entry point: parse arguments, build QC object, run all configured plots.
     argparser = argparse.ArgumentParser(description='Univariate QC for photometry data')
-    argparser.add_argument('--region_file_path', type=str, default='/Users/sp624AA/Downloads/waves_qc/photometry_WD01.parquet', help='Path to the region parquet file')
-    argparser.add_argument('--region_maml_file_path', type=str, default='/Users/sp624AA/Downloads/waves_qc/photometry_WD01.maml', help='Path to the region maml file')
-    argparser.add_argument('--region_name', type=str, default='WD01', help='Name of the region')
-    argparser.add_argument('--save_dir', type=str, default='/Users/sp624AA/Downloads/waves_qc/outputs/', help='Directory to save the outputs')
+    argparser.add_argument('--region_file_path', type=str, default='/Users/sp624AA/Downloads/waves_qc/photometry_WD03.parquet', help='Path to the region parquet file')
+    argparser.add_argument('--region_maml_file_path', type=str, default='/Users/sp624AA/Downloads/waves_qc/photometry_WD03.maml', help='Path to the region maml file')
+    argparser.add_argument('--region_name', type=str, default='WD03', help='Name of the region')
+    argparser.add_argument('--save_dir', type=str, default='/Users/sp624AA/Downloads/plots/', help='Directory to save the outputs')
     args = argparser.parse_args()
 
     # Run full orchestration: initialize object (which sorts columns + units),
     # then generate all requested outputs.
     print(f"Running univariate QC for region: {args.region_name}")
     qc = UnivariatePhotomQC(region_file_path=args.region_file_path, region_maml_file_path=args.region_maml_file_path, region_name=args.region_name, save_dir=args.save_dir)
-    #qc.make_all_plots()
+    qc.make_all_plots()
     qc.make_all_tables()
     print('Done!')
 
