@@ -31,17 +31,13 @@ class ColumnQC:
 
 
     def load_column(self):
-        # Read only the requested column from parquet to keep memory usage smaller.
         self.photom_col = pd.read_parquet(self.file_path, columns=[self.column_name])
         if self.index_mask is not None:
-            # If a boolean mask is provided, keep only rows that pass the mask.
             self.photom_col = self.photom_col.loc[self.index_mask]
-
         if self.logged:
-            # Optional log10 scaling for quantities such as fluxes/radii.
-            # NOTE: this expects positive values; non-positive values would become
-            # invalid/-inf and should be handled upstream if present.
-            self.photom_col[self.column_name] = np.log10(self.photom_col[self.column_name])
+            # Mask non-positive values BEFORE log10 so they become NaN cleanly
+            col = self.photom_col[self.column_name]
+            self.photom_col[self.column_name] = np.where(col > 0, np.log10(col), np.nan)
         return self.photom_col[self.column_name]
 
     
@@ -60,6 +56,7 @@ class ColumnQC:
 
     def drop_nans(self):
         # Most statistics are computed on finite data only, so we remove NaNs here.
+        print('Dropping NaNs from column:', self.column_name)
         self.photom_col = self.photom_col.dropna(subset=[self.column_name])
         return self.photom_col[self.column_name]
 
@@ -104,15 +101,15 @@ class ColumnQC:
     
 
     def sigma_percentiles(self):
-        return np.percentile(self.photom_col[self.column_name], [0, 16, 50, 84, 100])
+        return np.nanpercentile(self.photom_col[self.column_name], [0, 16, 50, 84, 100])
     
 
     def quantiles(self):
-        return np.percentile(self.photom_col[self.column_name], [0, 25, 50, 75 ,100])
+        return np.nanpercentile(self.photom_col[self.column_name], [0, 25, 50, 75 ,100])
     
 
     def percentiles(self):
-        return np.percentile(self.photom_col[self.column_name], np.arange(0, 101, 1))
+        return np.nanpercentile(self.photom_col[self.column_name], np.arange(0, 101, 1))
     
 
     def zero_or_below_fraction(self):
@@ -423,6 +420,9 @@ class UnivariatePhotomQC:
 
         for pos, col in zip(positions, columns):
             print(f"Plotting PDF for column '{col}' at position {pos} in bag '{bag_name}'")
+
+            if col == 'flux_density_err_FUV_GALEX_total':
+                print(f"Percentiles for {col}: {percentiles_dict[col]}")
             all_percentiles = percentiles_dict[col]   # shape (100,)
             p0, p100 = minmax_dict[col]
 
@@ -698,10 +698,10 @@ class UnivariatePhotomQC:
 def main():
     # CLI entry point: parse arguments, build QC object, run all configured plots.
     argparser = argparse.ArgumentParser(description='Univariate QC for photometry data')
-    argparser.add_argument('--region_file_path', type=str, default='/Users/sp624AA/Downloads/waves_qc/photometry_WD03.parquet', help='Path to the region parquet file')
-    argparser.add_argument('--region_maml_file_path', type=str, default='/Users/sp624AA/Downloads/waves_qc/photometry_WD03.maml', help='Path to the region maml file')
-    argparser.add_argument('--region_name', type=str, default='WD03', help='Name of the region')
-    argparser.add_argument('--save_dir', type=str, default='/Users/sp624AA/Downloads/plots/', help='Directory to save the outputs')
+    argparser.add_argument('--region_file_path', type=str, default='/Users/sp624AA/Downloads/waves_qc/photometry_WD01.parquet', help='Path to the region parquet file')
+    argparser.add_argument('--region_maml_file_path', type=str, default='/Users/sp624AA/Downloads/waves_qc/photometry_WD01.maml', help='Path to the region maml file')
+    argparser.add_argument('--region_name', type=str, default='WD01', help='Name of the region')
+    argparser.add_argument('--save_dir', type=str, default='/Users/sp624AA/Downloads/test/', help='Directory to save the outputs')
     args = argparser.parse_args()
 
     # Run full orchestration: initialize object (which sorts columns + units),
